@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>İkinci Hayat: Geri Dönüşüm Bandı</title>
+<style>
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: #0E2730;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+#sahne-kutusu {
+  position: relative;
+  width: 480px; height: 360px;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #E8F7F0;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+#sahne-kutusu:fullscreen { border-radius: 0; background: #000; }
+#sahne { display: block; width: 100%; height: 100%; cursor: pointer; }
+#gostergeler { position: absolute; left: 0; top: 0; width: 480px; height: 360px; transform-origin: 0 0; pointer-events: none; }
+.gosterge {
+  position: absolute;
+  background: #E6F0FF;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 5px;
+  padding: 2px;
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+}
+.gosterge b {
+  display: block;
+  min-width: 46px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #FF8C1A;
+  color: #fff;
+  font-size: 15px;
+  line-height: 20px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+#yukleniyor {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  background: #E8F7F0; color: #1F4E5F;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-weight: 800; font-size: 18px;
+  text-align: center;
+}
+#yukleniyor[hidden] { display: none; }
+</style>
+</head>
+<body>
+<div id="sahne-kutusu">
+  <canvas id="sahne" width="480" height="360" aria-label="Oyun sahnesi"></canvas>
+  <div id="gostergeler"></div>
+  <div id="yukleniyor">Oyun yükleniyor…</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@scratch/scratch-vm@15.3.0/dist/web/scratch-vm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@scratch/scratch-render@15.3.0/dist/web/scratch-render.min.js"></script>
+<script src="oyun-verisi.js"></script>
+<script>
+/* Oyunun varlıklarını (kostüm, ses) sayfanın içinden veren küçük depo. */
+window.OyunDeposu = function (varliklar) {
+  const AssetType = {
+    ImageBitmap: { contentType: 'image/png', name: 'ImageBitmap', runtimeFormat: 'png', immutable: true },
+    ImageVector: { contentType: 'image/svg+xml', name: 'ImageVector', runtimeFormat: 'svg', immutable: true },
+    Project: { contentType: 'application/json', name: 'Project', runtimeFormat: 'json', immutable: false },
+    Sound: { contentType: 'audio/x-wav', name: 'Sound', runtimeFormat: 'wav', immutable: true },
+    Sprite: { contentType: 'application/json', name: 'Sprite', runtimeFormat: 'json', immutable: false }
+  };
+  const DataFormat = { JPG: 'jpg', JSON: 'json', MP3: 'mp3', PNG: 'png', SB2: 'sb2', SB3: 'sb3', SVG: 'svg', WAV: 'wav' };
+  function cozBase64(s) { const bin = atob(s); const out = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return out; }
+  function yazBase64(u8) { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); }
+  class Asset {
+    constructor(assetType, assetId, dataFormat, data) {
+      this.assetType = assetType; this.assetId = assetId; this.dependencies = [];
+      this.setData(data, dataFormat || assetType.runtimeFormat);
+    }
+    setData(data, dataFormat) { this.data = data; this.dataFormat = dataFormat; this.clean = true; }
+    decodeText() { return new TextDecoder().decode(this.data); }
+    encodeTextData(text, dataFormat) { this.setData(new TextEncoder().encode(text), dataFormat); }
+    encodeDataURI(contentType) { return 'data:' + (contentType || this.assetType.contentType) + ';base64,' + yazBase64(this.data); }
+  }
+  const onbellek = {};
+  let ilkSvg = null, ilkWav = null;
+  Object.keys(varliklar).forEach(function (ad) {
+    const n = ad.lastIndexOf('.'), id = ad.slice(0, n), uzanti = ad.slice(n + 1);
+    const tur = uzanti === 'svg' ? AssetType.ImageVector : (uzanti === 'wav' ? AssetType.Sound : AssetType.ImageBitmap);
+    onbellek[id] = new Asset(tur, id, uzanti, cozBase64(varliklar[ad]));
+    if (uzanti === 'svg' && !ilkSvg) ilkSvg = id;
+    if (uzanti === 'wav' && !ilkWav) ilkWav = id;
+  });
+  return {
+    AssetType: AssetType,
+    DataFormat: DataFormat,
+    defaultAssetId: { ImageVector: ilkSvg, ImageBitmap: ilkSvg, Sound: ilkWav },
+    scratchFetch: { scratchFetch: window.fetch.bind(window), createQueue: function () {}, setMetadata: function () {}, unsetMetadata: function () {}, RequestMetadata: { RunId: 'X-RunId', ProjectId: 'X-ProjectId' } },
+    get: function (id) { return onbellek[id] || null; },
+    createAsset: function (type, format, data, id) { const a = new Asset(type, id, format, data); if (id) onbellek[id] = a; return a; },
+    load: function (type, id) { return Promise.resolve(onbellek[id] || null); }
+  };
+};
+
+/* Web Audio ile çalışan küçük ses motoru. */
+window.OyunSesi = function () {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  const ctx = new AC();
+  const giris = ctx.createGain();
+  giris.connect(ctx.destination);
+  let sayac = 0;
+  function Banka() { this.calarlar = {}; this.calan = new Map(); }
+  Banka.prototype.addSoundPlayer = function (p) { this.calarlar[p.id] = p; };
+  Banka.prototype.getSoundPlayer = function (id) { return this.calarlar[id]; };
+  Banka.prototype._durdur = function (anahtar) {
+    const k = this.calan.get(anahtar);
+    if (!k) return;
+    this.calan.delete(anahtar);
+    k.src.onended = null;
+    try { k.src.stop(); } catch (e) { /* zaten durmuş */ }
+    k.bitir();
+  };
+  Banka.prototype.playSound = function (target, soundId) {
+    const p = this.calarlar[soundId];
+    if (!p) return Promise.resolve();
+    const anahtar = target.id + ':' + soundId;
+    this._durdur(anahtar);
+    const src = ctx.createBufferSource();
+    src.buffer = p.buffer;
+    const g = ctx.createGain();
+    g.gain.value = (typeof target.volume === 'number' ? target.volume : 100) / 100;
+    src.connect(g); g.connect(giris);
+    const self = this;
+    return new Promise(function (bitir) {
+      self.calan.set(anahtar, { src: src, bitir: bitir });
+      src.onended = function () { if (self.calan.get(anahtar) && self.calan.get(anahtar).src === src) self.calan.delete(anahtar); bitir(); };
+      src.start();
+    });
+  };
+  Banka.prototype.stop = function (target, soundId) { this._durdur(target.id + ':' + soundId); };
+  Banka.prototype.stopAllSounds = function (target) {
+    const on = target ? target.id + ':' : '';
+    Array.from(this.calan.keys()).forEach(function (a) { if (!on || a.indexOf(on) === 0) this._durdur(a); }, this);
+  };
+  Banka.prototype.setEffects = function () {};
+  Banka.prototype.dispose = function () { this.stopAllSounds(); };
+  return {
+    audioContext: ctx,
+    inputNode: giris,
+    getLoudness: function () { return -1; },
+    createBank: function () { return new Banka(); },
+    decodeSoundPlayer: function (sound) {
+      const d = sound.data;
+      const kopya = d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength);
+      return ctx.decodeAudioData(kopya).then(function (buf) { sayac += 1; return { id: 'ses' + sayac, buffer: buf }; });
+    }
+  };
+};
+</script>
+<script>
+(function () {
+  const kutu = document.getElementById('sahne-kutusu');
+  const canvas = document.getElementById('sahne');
+  const katman = document.getElementById('gostergeler');
+  const yukleniyor = document.getElementById('yukleniyor');
+  let vm, renderer, audio = null;
+
+  function boyutla() {
+    const maxW = Math.min(960, window.innerWidth - 16);
+    const maxH = window.innerHeight - 16;
+    let w = Math.min(maxW, maxH * 4 / 3);
+    w = Math.max(240, Math.floor(w));
+    const h = Math.round(w * 3 / 4);
+    kutu.style.width = w + 'px';
+    kutu.style.height = h + 'px';
+    katman.style.transform = 'scale(' + (w / 480) + ')';
+    if (renderer) {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      renderer.resize(Math.round(w * dpr), Math.round(h * dpr));
+    }
+  }
+
+  // Fare ve dokunma: Scratch'e sahne içindeki konumu gönder
+  function gonder(clientX, clientY, isDown) {
+    if (!vm) return;
+    const r = canvas.getBoundingClientRect();
+    const d = { x: clientX - r.left, y: clientY - r.top, canvasWidth: r.width, canvasHeight: r.height };
+    if (isDown !== undefined) d.isDown = isDown;
+    vm.postIOData('mouse', d);
+  }
+  function sesiUyandir() {
+    if (audio && audio.audioContext && audio.audioContext.state !== 'running') {
+      audio.audioContext.resume().catch(function () {});
+    }
+  }
+  canvas.addEventListener('mousedown', function (e) { sesiUyandir(); gonder(e.clientX, e.clientY, true); e.preventDefault(); });
+  document.addEventListener('mousemove', function (e) { gonder(e.clientX, e.clientY); });
+  document.addEventListener('mouseup', function (e) { gonder(e.clientX, e.clientY, false); });
+  canvas.addEventListener('touchstart', function (e) { sesiUyandir(); const t = e.changedTouches[0]; gonder(t.clientX, t.clientY); gonder(t.clientX, t.clientY, true); e.preventDefault(); }, { passive: false });
+  canvas.addEventListener('touchmove', function (e) { const t = e.changedTouches[0]; gonder(t.clientX, t.clientY); e.preventDefault(); }, { passive: false });
+  canvas.addEventListener('touchend', function (e) { const t = e.changedTouches[0]; gonder(t.clientX, t.clientY, false); e.preventDefault(); }, { passive: false });
+  canvas.addEventListener('touchcancel', function (e) { const t = e.changedTouches[0]; gonder(t.clientX, t.clientY, false); }, { passive: false });
+
+  // Değişken göstergeleri
+  let sonGosterge = '';
+  function gostergeleriCiz() {
+    if (vm) {
+      const ms = vm.runtime._monitorState.valueSeq().toArray().filter(function (m) { return m.get('visible'); });
+      const anahtar = ms.map(function (m) { return m.get('id') + ':' + m.get('value'); }).join('|');
+      if (anahtar !== sonGosterge) {
+        sonGosterge = anahtar;
+        katman.innerHTML = ms.map(function (m) {
+          const deger = String(m.get('value')).replace(/[&<>]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; });
+          return '<div class="gosterge" style="left:' + m.get('x') + 'px;top:' + m.get('y') + 'px"><b>' + deger + '</b></div>';
+        }).join('');
+      }
+    }
+    requestAnimationFrame(gostergeleriCiz);
+  }
+
+  async function kur() {
+    boyutla();
+    window.addEventListener('resize', boyutla);
+    try {
+      if (typeof VirtualMachine === 'undefined' || typeof ScratchRender === 'undefined') {
+        throw new Error('Scratch kütüphaneleri yüklenemedi');
+      }
+      vm = new VirtualMachine();
+      renderer = new ScratchRender(canvas);
+      vm.attachRenderer(renderer);
+      vm.attachStorage(window.OyunDeposu(window.OYUN_VARLIKLARI));
+      try { audio = window.OyunSesi(); vm.attachAudioEngine(audio); } catch (err) { audio = null; }
+      boyutla();
+      const proje = JSON.parse(JSON.stringify(window.OYUN_PROJESI));
+      proje.projectVersion = 3;
+      await vm.deserializeProject(proje, null);
+      vm.runtime.handleProjectLoaded();
+      vm.start();
+      vm.greenFlag();
+      yukleniyor.hidden = true;
+      window.oyunVM = vm;
+      requestAnimationFrame(gostergeleriCiz);
+    } catch (err) {
+      yukleniyor.textContent = 'Oyun açılamadı. Sayfayı yenileyin.';
+      console.error(err);
+    }
+  }
+  kur();
+})();
+</script>
+</body>
+</html>
